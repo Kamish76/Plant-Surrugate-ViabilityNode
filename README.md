@@ -32,6 +32,7 @@ Built around a low-power **RISC-V** core on a strict energy-harvesting power cha
 | AHT20 | I2C | Temperature & relative humidity *(SMD power LED desoldered)* |
 | BMP280 | I2C | Barometric pressure |
 | Capacitive Soil Moisture v1.2 | Analog (`A0`) | Soil saturation — GPIO `D1`-switched power |
+| Battery Monitor | Analog (`A2` / `D2`) | Cell voltage via external 2:1 divider (2× 205 kΩ) → percentage |
 
 ### Pin Connections
 
@@ -40,7 +41,8 @@ Built around a low-power **RISC-V** core on a strict energy-harvesting power cha
 | I2C SDA | `D4` |
 | I2C SCL | `D5` |
 | Soil sensor power | `D1` |
-| Soil sensor analog data | `A0` |
+| Soil sensor analog data | `A0` / `D0` |
+| Battery voltage divider sense | `A2` / `D2` |
 
 ---
 
@@ -134,3 +136,6 @@ Raw telemetry flows into **Supabase PostgreSQL** and is visualized on a **Next.j
 - [ ] Calibrate soil moisture sensor — map raw ADC values to a 0–100% saturation scale.
 - [ ] Implement DLI, Soil Drainage Velocity, and VPD calculations in the analytics engine.
 - [ ] Add sensor error handling for invalid or out-of-range readings.
+- [x] Add external 2:1 voltage divider on `D2/A2` to sense 18650 cell voltage (2× 205 kΩ, ~10.24 µA parasitic drain).
+- [x] Implement `readBatteryVoltage()` with 16-sample ADC averaging and `calculateBatteryPercentage()` with linear interpolation (3.30 V–4.20 V).
+- [x] Add `battery_v` and `battery_pct` columns to the Supabase `telemetry` table.

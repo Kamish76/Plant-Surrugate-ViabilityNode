@@ -28,6 +28,32 @@ The system is built around a low-power RISC-V core and a strict energy-harvestin
 | AHT20 | I2C | Temperature & relative humidity *(SMD power LED desoldered to eliminate parasitic drain)* |
 | BMP280 | I2C | Barometric pressure |
 | Capacitive Soil Moisture v1.2 | Analog (A0) | Soil saturation — powered dynamically via GPIO D1 to prevent parasitic drain between readings |
+| Battery Monitor | Analog (D2/A2) | 18650 cell voltage via external 2:1 resistor divider → linear percentage |
+
+### Battery Monitoring Circuit
+
+The XIAO ESP32-C6 has no internal battery ADC sense line. An external high-impedance voltage divider scales the 1S cell down to safe GPIO levels:
+
+```
+[ BAT (+) Pad / 4.2V Max ]
+      |
+ [ 30D / 205kΩ ]   ← Top resistor (SMD 0603)
+      |
+      +-------------------> Pin D2 / A2 (Sense Tap)
+      |
+ [ 30D / 205kΩ ]   ← Bottom resistor (SMD 0603)
+      |
+[ BAT (-) Pad / Common GND ]
+```
+
+| Parameter | Value |
+|---|---|
+| Sense pin | `D2` / `A2` |
+| Resistor values | 2× 205 kΩ (0603 SMD, marked `30D`) |
+| Total divider impedance | 410 kΩ |
+| Pin voltage at 4.20 V (full) | ≈2.10 V (safe ≤ 3.3 V GPIO limit) |
+| Pin voltage at 3.00–3.30 V (empty) | ≈1.50–1.65 V |
+| Static parasitic drain at 4.20 V | ≈10.24 µA (<0.25 mAh/day — negligible in deep sleep) |
 
 ---
 
@@ -198,3 +224,104 @@ Add the ArduinoJson library and serialize the telemetry into a structured payloa
 ## Radio Power Management
 
 Wi-Fi wake-up can produce transient current spikes of up to 350 mA. Keep Wi-Fi disabled during sensor acquisition. Initialize it only when the device is ready to POST the JSON payload, then immediately call `esp_deep_sleep_start()` after the request completes.
+
+## JSON Payload Schema
+
+The ESP32-C6 serializes all readings into a single JSON payload POSTed to `/api/telemetry`:
+
+```json
+{
+  "device_id": "plant_node_01",
+  "illuminance_lux": 3491.02,
+  "temperature_c": 31.71,
+  "humidity_rh": 67.68,
+  "pressure_hpa": 1009.73,
+  "soil_moisture_raw": 1244,
+  "battery_v": 4.12,
+  "battery_pct": 91
+}
+```
+
+## Battery Reader Firmware
+
+16-sample ADC averaging eliminates RF-transmission ripple and compensates for the absence of a hardware filter capacitor:
+
+```cpp
+#define BATTERY_PIN D2
+#define R1 205000.0F // Top resistor (205kΩ)
+#define R2 205000.0F // Bottom resistor (205kΩ)
+
+float readBatteryVoltage() {
+  analogReadResolution(12);
+  analogSetAttenuation(ADC_11db);
+
+  uint32_t rawSum = 0;
+  for (int i = 0; i < 16; i++) {
+    rawSum += analogRead(BATTERY_PIN);
+    delay(1);
+  }
+  float rawAverage = rawSum / 16.0F;
+
+  float pinVoltage = (rawAverage / 4095.0F) * 3.3F;
+  float batteryVoltage = pinVoltage * ((R1 + R2) / R2);
+  return batteryVoltage;
+}
+
+int calculateBatteryPercentage(float voltage) {
+  if (voltage >= 4.20F) return 100;
+  if (voltage <= 3.30F) return 0;
+  // Linear interpolation: 3.30V — 4.20V maps to 0 — 100%
+  int percent = (int)(((voltage - 3.30F) / (4.20F - 3.30F)) * 100.0F);
+  return constrain(percent, 0, 100);
+}
+```
+
+---
+
+# Phase 2: Database Schema
+
+## Supabase Telemetry Table
+
+Run in the Supabase SQL Editor to create the complete table schema including battery columns:
+
+```sql
+CREATE TABLE telemetry (
+    id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    device_id TEXT NOT NULL,
+    recorded_at TIMESTAMPTZ DEFAULT NOW(),
+    illuminance_lux NUMERIC(10, 2) NOT NULL,
+    temperature_c NUMERIC(5, 2) NOT NULL,
+    humidity_rh NUMERIC(5, 2) NOT NULL,
+    pressure_hpa NUMERIC(7, 2) NOT NULL,
+    soil_moisture_raw INTEGER NOT NULL,
+    battery_v NUMERIC(4, 2),   -- NULL allowed for legacy nodes without divider
+    battery_pct INTEGER        -- 0–100, linear interpolation over 3.30V–4.20V
+);
+
+CREATE INDEX idx_telemetry_device_time
+ON telemetry (device_id, recorded_at DESC);
+```
+
+## Migration (existing table)
+
+If the table already exists, append the two columns safely:
+
+```sql
+ALTER TABLE telemetry
+ADD COLUMN IF NOT EXISTS battery_v NUMERIC(4, 2),
+ADD COLUMN IF NOT EXISTS battery_pct INTEGER;
+```
+
+---
+
+## Full Pin Assignment
+
+| Pin | Type | Assignment |
+|---|---|---|
+| D0 / A0 | Analog In | Capacitive Soil Moisture Sensor v1.2 (Signal Out) |
+| D1 | Digital Out | Soil Moisture Sensor Power Switch (`HIGH` = Read, `LOW` = Off) |
+| D2 / A2 | Analog In | Battery Voltage Divider Sense Tap |
+| D4 | I2C SDA | Shared Bus: VEML7700 & AHT20+BMP280 |
+| D5 | I2C SCL | Shared Bus: VEML7700 & AHT20+BMP280 |
+| 3V3 | Power Out | Regulated 3.3 V rail for VEML7700 & AHT20+BMP280 |
+| GND | Ground | Common system ground |
