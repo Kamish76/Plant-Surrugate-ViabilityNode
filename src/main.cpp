@@ -436,23 +436,41 @@ void setup() {
   }
 
   // ─────────────────────────────────────────────────────────────────────────
-  //  STEP 5: Deep sleep — duration depends on active mode
+  //  STEP 5: Wait, then restart or sleep depending on active mode
+  //
+  //  WORK mode    → deep sleep (< 20 µA, 30-min timer wake)
+  //  SERVICE mode → stay fully awake, delay, then soft restart via
+  //                 esp_restart(). RTC memory is preserved across a soft
+  //                 restart so activeMode carries through — no deep sleep
+  //                 means Serial and WiFi remain accessible the whole time,
+  //                 giving a full-blast continuous data stream for debugging.
   // ─────────────────────────────────────────────────────────────────────────
-  uint32_t intervalS = (activeMode == NodeMode::SERVICE)
-                     ? SERVICE_INTERVAL_S
-                     : WORK_INTERVAL_S;
 
-  uint64_t sleepUs = (uint64_t)intervalS * 1000000ULL;
-  Serial.printf("\n[Sleep] Mode: %s — sleeping for %u s...\n",
-                (activeMode == NodeMode::SERVICE) ? "SERVICE" : "WORK",
-                intervalS);
-  Serial.flush();
+  if (activeMode == NodeMode::SERVICE) {
+    Serial.printf("\n[Service] Staying awake — next read in %u s. "
+                  "Hold D3 on next boot to return to Work mode.\n",
+                  SERVICE_INTERVAL_S);
+    Serial.flush();
 
-  esp_sleep_enable_timer_wakeup(sleepUs);
-  esp_deep_sleep_start();
+    delay((uint32_t)SERVICE_INTERVAL_S * 1000UL);   // full-power wait
 
-  // Unreachable — deep sleep reboots the chip.
+    Serial.println("[Service] Restarting for next reading...");
+    Serial.flush();
+    esp_restart();   // soft reboot — RTC memory (mode) is preserved
+
+  } else {
+    // WORK mode: deep sleep to sub-20 µA.
+    uint64_t sleepUs = (uint64_t)WORK_INTERVAL_S * 1000000ULL;
+    Serial.printf("\n[Sleep] Work mode — deep sleeping for %u min...\n",
+                  WORK_INTERVAL_S / 60);
+    Serial.flush();
+
+    esp_sleep_enable_timer_wakeup(sleepUs);
+    esp_deep_sleep_start();
+    // Unreachable — deep sleep reboots the chip.
+  }
 }
+
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  loop() — intentionally empty; all work happens in setup()
