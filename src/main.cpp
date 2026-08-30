@@ -36,6 +36,7 @@
 #define SOIL_POWER_PIN   D1    // GPIO switch for soil sensor power
 #define SOIL_DATA_PIN    A0    // Capacitive soil moisture signal
 #define BATTERY_PIN      D2    // Voltage divider sense tap (2:1, 2× 205 kΩ)
+#define MODE_BUTTON_PIN  D3    // Mode toggle button — wire to GND, active LOW
 
 // ── Battery Voltage Divider ───────────────────────────────────────────────────
 // Two matched 205 kΩ (SMD 0603, marked 30D) in series from BAT(+) to GND.
@@ -44,8 +45,12 @@
 #define R1 205000.0F
 #define R2 205000.0F
 
-// ── Timing ────────────────────────────────────────────────────────────────────
-#define SLEEP_INTERVAL_S   (30 * 60)   // 30 minutes in seconds
+// ── Ping-Rate Intervals ───────────────────────────────────────────────────────
+// Work mode  : normal low-power cadence (30 min).
+// Service mode: rapid cadence for field tuning / debugging (1 min).
+#define WORK_INTERVAL_S    (30 * 60)   // 30 minutes
+#define SERVICE_INTERVAL_S (1  * 60)   // 1 minute
+
 #define WIFI_TIMEOUT_MS    10000        // Max time to wait for WiFi (10 s)
 
 // ── NVS Offline Queue ─────────────────────────────────────────────────────────
@@ -57,6 +62,16 @@ Adafruit_VEML7700 veml = Adafruit_VEML7700();
 Adafruit_AHTX0    aht;
 Adafruit_BMP280   bmp;
 Preferences       prefs;               // NVS handle
+
+// ── Operating Mode ────────────────────────────────────────────────────────────
+// Persisted in RTC memory — survives deep sleep, reset on power-off.
+// Toggle by holding the button on D3 at boot.
+enum class NodeMode : uint8_t {
+  WORK    = 0,   // Normal low-power cadence
+  SERVICE = 1    // Rapid cadence for field tuning / debugging
+};
+
+RTC_DATA_ATTR NodeMode activeMode = NodeMode::WORK;   // default: WORK
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  Data Types
@@ -330,6 +345,47 @@ SensorReading acquireSensors() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+//  Mode Button
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Called once per boot. If the button is held (active LOW) for at least
+// DEBOUNCE_MS, the mode toggles and the change is logged to Serial.
+// Cost: ~60 ms wake time at most — negligible on a 30-min cycle.
+void checkModeButton() {
+  const uint32_t DEBOUNCE_MS = 50;
+
+  pinMode(MODE_BUTTON_PIN, INPUT_PULLUP);
+  delay(5);   // settle internal pull-up before reading
+
+  if (digitalRead(MODE_BUTTON_PIN) == LOW) {
+    delay(DEBOUNCE_MS);   // debounce — confirm it is still held
+    if (digitalRead(MODE_BUTTON_PIN) == LOW) {
+      // Toggle
+      activeMode = (activeMode == NodeMode::WORK)
+                 ? NodeMode::SERVICE
+                 : NodeMode::WORK;
+
+      if (activeMode == NodeMode::SERVICE) {
+        Serial.println("[MODE] *** SERVICE MODE *** — ping every "
+                       + String(SERVICE_INTERVAL_S) + " s");
+      } else {
+        Serial.println("[MODE] *** WORK MODE *** — ping every "
+                       + String(WORK_INTERVAL_S / 60) + " min");
+      }
+    }
+  } else {
+    // Button not pressed — just report current mode.
+    if (activeMode == NodeMode::SERVICE) {
+      Serial.println("[MODE] Service mode active — ping every "
+                     + String(SERVICE_INTERVAL_S) + " s");
+    } else {
+      Serial.println("[MODE] Work mode active — ping every "
+                     + String(WORK_INTERVAL_S / 60) + " min");
+    }
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 //  setup() — Full duty-cycle entry point
 //  (loop() is never reached; the device sleeps and reboots.)
 // ─────────────────────────────────────────────────────────────────────────────
@@ -357,17 +413,22 @@ void setup() {
   if (!bmp.begin())  Serial.println("[WARN] BMP280 not found.");
 
   // ─────────────────────────────────────────────────────────────────────────
-  //  STEP 1: Read all sensors
+  //  STEP 1: Check mode button — toggle if held, log current mode
+  // ─────────────────────────────────────────────────────────────────────────
+  checkModeButton();
+
+  // ─────────────────────────────────────────────────────────────────────────
+  //  STEP 2: Read all sensors
   // ─────────────────────────────────────────────────────────────────────────
   SensorReading reading = acquireSensors();
 
   // ─────────────────────────────────────────────────────────────────────────
-  //  STEP 2: Push to NVS offline queue (always — regardless of connectivity)
+  //  STEP 3: Push to NVS offline queue (always — regardless of connectivity)
   // ─────────────────────────────────────────────────────────────────────────
   NVSQueue::push(reading);
 
   // ─────────────────────────────────────────────────────────────────────────
-  //  STEP 3: Attempt WiFi connection and flush the queue
+  //  STEP 4: Attempt WiFi connection and flush the queue
   // ─────────────────────────────────────────────────────────────────────────
   if (connectWiFi()) {
     NVSQueue::flush();
@@ -375,11 +436,16 @@ void setup() {
   }
 
   // ─────────────────────────────────────────────────────────────────────────
-  //  STEP 4: Deep sleep until next interval
+  //  STEP 5: Deep sleep — duration depends on active mode
   // ─────────────────────────────────────────────────────────────────────────
-  uint64_t sleepUs = (uint64_t)SLEEP_INTERVAL_S * 1000000ULL;
-  Serial.printf("\n[Sleep] Entering deep sleep for %d min...\n",
-                SLEEP_INTERVAL_S / 60);
+  uint32_t intervalS = (activeMode == NodeMode::SERVICE)
+                     ? SERVICE_INTERVAL_S
+                     : WORK_INTERVAL_S;
+
+  uint64_t sleepUs = (uint64_t)intervalS * 1000000ULL;
+  Serial.printf("\n[Sleep] Mode: %s — sleeping for %u s...\n",
+                (activeMode == NodeMode::SERVICE) ? "SERVICE" : "WORK",
+                intervalS);
   Serial.flush();
 
   esp_sleep_enable_timer_wakeup(sleepUs);
