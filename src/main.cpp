@@ -100,13 +100,13 @@ float readBatteryVoltage() {
   analogReadResolution(12);
   analogSetAttenuation(ADC_11db);
 
-  uint32_t rawSum = 0;
+  uint32_t mvSum = 0;
   for (int i = 0; i < 16; i++) {
-    rawSum += analogRead(BATTERY_PIN);
+    mvSum += analogReadMilliVolts(BATTERY_PIN);
     delay(1);
   }
-  float rawAvg   = rawSum / 16.0F;
-  float pinV     = (rawAvg / 4095.0F) * 3.3F;
+  float mvAvg    = mvSum / 16.0F;
+  float pinV     = mvAvg / 1000.0F; // Convert millivolts to volts
   float batteryV = pinV * ((R1 + R2) / R2);
   return batteryV;
 }
