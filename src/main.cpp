@@ -47,9 +47,9 @@
 
 // ── Ping-Rate Intervals ───────────────────────────────────────────────────────
 // Work mode  : normal low-power cadence (30 min).
-// Service mode: rapid cadence for field tuning / debugging (1 min).
+// Service mode: rapid cadence for field tuning / debugging (5 s).
 #define WORK_INTERVAL_S    (30 * 60)   // 30 minutes
-#define SERVICE_INTERVAL_S (1  * 60)   // 1 minute
+#define SERVICE_INTERVAL_S 5           // 5 seconds
 
 #define WIFI_TIMEOUT_MS    10000        // Max time to wait for WiFi (10 s)
 
@@ -348,40 +348,31 @@ SensorReading acquireSensors() {
 //  Mode Button
 // ─────────────────────────────────────────────────────────────────────────────
 
-// Called once per boot. If the button is held (active LOW) for at least
-// DEBOUNCE_MS, the mode toggles and the change is logged to Serial.
-// Cost: ~60 ms wake time at most — negligible on a 30-min cycle.
+// Called once per boot. Directly selects the operating mode based on
+// whether D3 is held at boot time (active LOW, internal pull-up):
+//   D3 held   → SERVICE mode (stay awake, ping every SERVICE_INTERVAL_S s)
+//   D3 open   → WORK mode    (deep sleep, ping every WORK_INTERVAL_S s)
+// Cost: ~60 ms wake time — negligible on either cycle.
 void checkModeButton() {
   const uint32_t DEBOUNCE_MS = 50;
 
   pinMode(MODE_BUTTON_PIN, INPUT_PULLUP);
   delay(5);   // settle internal pull-up before reading
 
-  if (digitalRead(MODE_BUTTON_PIN) == LOW) {
-    delay(DEBOUNCE_MS);   // debounce — confirm it is still held
-    if (digitalRead(MODE_BUTTON_PIN) == LOW) {
-      // Toggle
-      activeMode = (activeMode == NodeMode::WORK)
-                 ? NodeMode::SERVICE
-                 : NodeMode::WORK;
+  bool held = (digitalRead(MODE_BUTTON_PIN) == LOW);
+  if (held) {
+    delay(DEBOUNCE_MS);                          // debounce
+    held = (digitalRead(MODE_BUTTON_PIN) == LOW); // confirm still held
+  }
 
-      if (activeMode == NodeMode::SERVICE) {
-        Serial.println("[MODE] *** SERVICE MODE *** — ping every "
-                       + String(SERVICE_INTERVAL_S) + " s");
-      } else {
-        Serial.println("[MODE] *** WORK MODE *** — ping every "
-                       + String(WORK_INTERVAL_S / 60) + " min");
-      }
-    }
+  if (held) {
+    activeMode = NodeMode::SERVICE;
+    Serial.println("[MODE] *** SERVICE MODE *** — ping every "
+                   + String(SERVICE_INTERVAL_S) + " s (staying awake)");
   } else {
-    // Button not pressed — just report current mode.
-    if (activeMode == NodeMode::SERVICE) {
-      Serial.println("[MODE] Service mode active — ping every "
-                     + String(SERVICE_INTERVAL_S) + " s");
-    } else {
-      Serial.println("[MODE] Work mode active — ping every "
-                     + String(WORK_INTERVAL_S / 60) + " min");
-    }
+    activeMode = NodeMode::WORK;
+    Serial.println("[MODE] Work mode — ping every "
+                   + String(WORK_INTERVAL_S / 60) + " min (deep sleep)");
   }
 }
 
