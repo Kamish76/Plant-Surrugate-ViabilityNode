@@ -366,11 +366,18 @@ void checkModeButton() {
   }
 
   if (held) {
-    activeMode = NodeMode::SERVICE;
+    // Toggle the mode
+    if (activeMode == NodeMode::SERVICE) {
+      activeMode = NodeMode::WORK;
+    } else {
+      activeMode = NodeMode::SERVICE;
+    }
+  }
+
+  if (activeMode == NodeMode::SERVICE) {
     Serial.println("[MODE] *** SERVICE MODE *** — ping every "
                    + String(SERVICE_INTERVAL_S) + " s (staying awake)");
   } else {
-    activeMode = NodeMode::WORK;
     Serial.println("[MODE] Work mode — ping every "
                    + String(WORK_INTERVAL_S / 60) + " min (deep sleep)");
   }

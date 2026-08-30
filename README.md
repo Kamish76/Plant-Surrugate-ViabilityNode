@@ -8,7 +8,7 @@ An autonomous, hyper-efficient microclimate profiling platform for evaluating pl
 
 ## Current Status
 
-The current firmware is a validated sensor test that reads all four sensor sources and prints telemetry to the serial monitor every five seconds. The soil sensor is powered only during its reading window via GPIO D1 to eliminate parasitic drain. Low-power RTC deep sleep has not been implemented yet — the `delay()` loop is a placeholder for the upcoming 30-minute sleep cycle.
+The firmware is fully operational. It features robust offline resilience via an NVS queue (holds up to 48 readings) and achieves extreme low power consumption using RTC deep sleep (sub-20µA idle). The device can be toggled between a normal **Work Mode** (30-min deep sleep) and a **Service Mode** (5-second rapid ping, stay-awake) by holding the mode button on boot.
 
 ---
 
@@ -61,14 +61,25 @@ Custom 3D-printed in **Fusion 360**, sliced in **OrcaSlicer** using UV-resistant
 
 ## Firmware Duty Cycle
 
-To achieve **30-day autonomy**, the firmware operates on a strict deep-sleep cycle:
+To achieve **30-day autonomy**, the firmware operates on a strict deep-sleep cycle and features two distinct operating modes stored in RTC memory.
 
-1. **Wake** — RTC timer boots the microcontroller
-2. **Power Up** — GPIO `D1` set `HIGH` to power soil sensor
-3. **Read** — I2C and analog sensors polled
-4. **Power Down** — GPIO `D1` set `LOW` immediately after reading
-5. **Transmit** — Telemetry serialized to JSON and POSTed to the backend
-6. **Sleep** — Device enters deep sleep for **30 minutes**
+### Operating Modes
+
+Toggle between modes by **holding a button wired to `D3` to GND** during boot:
+
+*   **Work Mode (Default)**: Normal low-power cadence. Pings every **30 minutes** and spends the rest of the time in deep sleep.
+*   **Service Mode**: Rapid cadence for field tuning and debugging. Pings every **5 seconds** and uses a soft-reboot (stays awake) to maintain the serial monitor stream.
+
+*The mode persists through soft and deep sleep resets until explicitly toggled again by holding the button during boot.*
+
+### Execution Flow (per boot)
+
+1.  **Wake** — RTC timer boots the microcontroller (or soft-reset in Service mode)
+2.  **Mode Check** — Reads `D3` button state to toggle mode if held
+3.  **Acquisition** — `D1` set `HIGH` to power soil sensor, I2C/analog sensors polled, `D1` set `LOW`
+4.  **Queue** — Reading is immediately saved to the offline NVS queue
+5.  **Transmit** — Connects to Wi-Fi. If successful, flushes all queued readings to the backend (deleting only upon HTTP 200)
+6.  **Sleep/Restart** — Disables Wi-Fi, then either enters deep sleep (Work mode) or delays and soft-restarts (Service mode)
 
 ---
 
