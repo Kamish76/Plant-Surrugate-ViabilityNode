@@ -18,6 +18,7 @@ Built around a low-power **RISC-V** core on a strict energy-harvesting power cha
 
 ### Microcontroller
 - **Seeed Studio XIAO ESP32-C6** — Sub-20µA deep sleep current
+- **Antenna** — Software-controlled RF switch selects the external U.FL antenna on boot (GPIO `3` LOW, GPIO `14` HIGH).
 
 ### Power System
 ```
@@ -61,7 +62,7 @@ Custom 3D-printed in **Fusion 360**, sliced in **OrcaSlicer** using UV-resistant
 
 ## Firmware Duty Cycle
 
-To achieve **30-day autonomy**, the firmware operates on a strict deep-sleep cycle and features two distinct operating modes stored in RTC memory.
+To achieve **30-day autonomy**, the firmware operates on a strict deep-sleep cycle and features two distinct operating modes stored in NVS.
 
 ### Operating Modes
 

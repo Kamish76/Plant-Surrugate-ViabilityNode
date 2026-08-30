@@ -64,14 +64,14 @@ Adafruit_BMP280   bmp;
 Preferences       prefs;               // NVS handle
 
 // ── Operating Mode ────────────────────────────────────────────────────────────
-// Persisted in RTC memory — survives deep sleep, reset on power-off.
+// Persisted in NVS — survives deep sleep, reset, and power-off.
 // Toggle by holding the button on D3 at boot.
 enum class NodeMode : uint8_t {
   WORK    = 0,   // Normal low-power cadence
   SERVICE = 1    // Rapid cadence for field tuning / debugging
 };
 
-RTC_DATA_ATTR NodeMode activeMode = NodeMode::WORK;   // default: WORK
+NodeMode activeMode = NodeMode::WORK;   // Loaded from NVS at boot
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  Data Types
@@ -350,11 +350,14 @@ SensorReading acquireSensors() {
 
 // Called once per boot. Directly selects the operating mode based on
 // whether D3 is held at boot time (active LOW, internal pull-up):
-//   D3 held   → SERVICE mode (stay awake, ping every SERVICE_INTERVAL_S s)
-//   D3 open   → WORK mode    (deep sleep, ping every WORK_INTERVAL_S s)
+//   D3 held   → Toggles between SERVICE and WORK mode.
+//   D3 open   → Proceeds with the currently saved mode.
 // Cost: ~60 ms wake time — negligible on either cycle.
 void checkModeButton() {
   const uint32_t DEBOUNCE_MS = 50;
+
+  prefs.begin("node_cfg", false);
+  activeMode = (NodeMode)prefs.getUInt("mode", (uint32_t)NodeMode::WORK);
 
   pinMode(MODE_BUTTON_PIN, INPUT_PULLUP);
   delay(5);   // settle internal pull-up before reading
@@ -372,7 +375,9 @@ void checkModeButton() {
     } else {
       activeMode = NodeMode::SERVICE;
     }
+    prefs.putUInt("mode", (uint32_t)activeMode);
   }
+  prefs.end();
 
   if (activeMode == NodeMode::SERVICE) {
     Serial.println("[MODE] *** SERVICE MODE *** — ping every "
@@ -389,6 +394,13 @@ void checkModeButton() {
 // ─────────────────────────────────────────────────────────────────────────────
 
 void setup() {
+  // ── XIAO ESP32C6 External Antenna Setup ───────────────────────────────────
+  pinMode(3, OUTPUT);
+  digitalWrite(3, LOW);      // Enable RF switch
+  pinMode(14, OUTPUT);
+  digitalWrite(14, HIGH);    // Select external U.FL antenna (LOW for ceramic)
+  delay(100);                // RF switch stabilization delay
+
   Serial.begin(115200);
   delay(200);   // allow USB-Serial to enumerate before printing
 
@@ -438,9 +450,9 @@ void setup() {
   //
   //  WORK mode    → deep sleep (< 20 µA, 30-min timer wake)
   //  SERVICE mode → stay fully awake, delay, then soft restart via
-  //                 esp_restart(). RTC memory is preserved across a soft
-  //                 restart so activeMode carries through — no deep sleep
-  //                 means Serial and WiFi remain accessible the whole time,
+  //                 esp_restart(). Mode is loaded from NVS across restarts
+  //                 so activeMode carries through — no deep sleep means
+  //                 Serial and WiFi remain accessible the whole time,
   //                 giving a full-blast continuous data stream for debugging.
   // ─────────────────────────────────────────────────────────────────────────
 
