@@ -8,6 +8,9 @@ An autonomous, hyper-efficient microclimate profiling platform for evaluating pl
 
 ## Current Status
 
+> 🚀 **Deployed & Monitoring**
+> The node has just been deployed and is currently in a testing phase to observe long-term viability and stability over time. Since it is a simple sensor module, current efforts are focused on monitoring telemetry data and observing if any adjustments or enhancements are needed.
+
 The firmware is fully operational. It features robust offline resilience via an NVS queue (holds up to 48 readings) and achieves extreme low power consumption using RTC deep sleep (sub-20µA idle). The device can be toggled between a normal **Work Mode** (30-min deep sleep) and a **Service Mode** (5-second rapid ping, stay-awake) by holding the mode button on boot.
 
 ---
