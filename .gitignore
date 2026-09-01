@@ -11,3 +11,6 @@ compile_commands.json
 .DS_Store
 *.bin
 *.elf
+
+# Credentials — never commit
+include/secrets.h
